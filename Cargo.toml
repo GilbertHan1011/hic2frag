@@ -1,0 +1,12 @@
+[package]
+name = "hic2frag"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bed-utils = "0.9.3"
+clap = {version = "4.5.50",  features = ["derive"] } 
+log = "0.4.28"
+noodles = "0.101.0"
+noodles-bam = "0.83.0"
+noodles-sam = "0.79.0"
