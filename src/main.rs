@@ -1,5 +1,4 @@
 use clap::Parser;
-use std::hash::Hash;
 use std::path::PathBuf;
 use noodles_bam as bam;
 use noodles_sam::alignment::Record;
@@ -51,6 +50,99 @@ fn get_read_start(read: &bam::Record) -> usize{
     pos
 }
 
+fn get_read_strand(read: &bam::Record) -> &str{
+    let mut strand = "+";
+    if read.flags().is_reverse_complemented(){
+        strand = "-"
+    }
+    strand
+}
+
+fn is_intra_chrom(read1:  &bam::Record, read2 :  &bam::Record) -> Option<bool>{
+    let tid1_opt = read1.reference_sequence_id().transpose().ok().flatten().unwrap();
+    let tid2_opt = read2.reference_sequence_id().transpose().ok().flatten().unwrap();
+    
+    if tid2_opt == tid2_opt {
+        return Some(false)
+    } else{
+        return Some(true)
+    }
+}
+
+/*
+Calculte the contact distance between two intrachromosomal reads
+
+    read1 : [Record]
+    read2 : [Record]
+
+*/    
+fn get_cis_distance(read1:  &bam::Record, read2 :  &bam::Record) -> Option<usize>{
+    let mut dist = None;
+    let unmap1 = read1.flags().is_unmapped();
+    let unmap2 = read2.flags().is_unmapped();
+    if !unmap1 && !unmap2{
+        let r1pos = get_read_pos(read1,"middle").unwrap();
+        let r2pos = get_read_pos(read2, "middle").unwrap();
+        if r1pos > r2pos {
+            dist = Some(r1pos - r2pos);
+        } else {
+            dist = Some(r2pos - r1pos);
+        }
+    }
+    dist
+}
+
+fn get_ordered_reads<'a>(read1: &'a bam::Record, read2: &'a bam::Record) 
+    -> Option<(&'a bam::Record, &'a bam::Record)>{
+    let tid1_opt = read1.reference_sequence_id().transpose().ok().flatten();
+    let tid2_opt = read2.reference_sequence_id().transpose().ok().flatten();
+    tid1_opt.zip(tid2_opt).and_then(|(tid1, tid2)| {
+        if tid1 < tid2 {
+            Some((read1,read2))
+        } else if tid1 > tid2{
+            Some((read2, read1))
+        } else {
+            let r1pos_opt = get_read_pos(read1, "middle");
+            let r2pos_opt = get_read_pos(read2, "middle");
+            r1pos_opt.zip(r2pos_opt).map(|(r1pos, r2pos)| {
+                // We have valid positions. Sort by position.
+                if r1pos <= r2pos {
+                    (read1, read2)
+                } else {
+                    (read2, read1)
+                }
+            })
+        }
+    })
+}
+
+fn are_contiguous_fragments(frag1:BED<3>, frag2:BED<3>, chr1:usize, chr2:usize) -> bool{
+    if chr1 != chr2{
+        return false
+    } 
+    let frag1_touch_frag2 = frag1.end() == frag2.start();
+    let frag2_touch_frag1 = frag1.start() == frag2.end();
+    frag2_touch_frag1 || frag1_touch_frag2
+}
+
+fn is_religation(read1: &bam::Record, read2: &bam::Record,frag1:BED<3>, frag2:BED<3>)-> bool{
+    let tid1_opt = read1.reference_sequence_id().transpose().ok().flatten().unwrap();
+    let tid2_opt = read2.reference_sequence_id().transpose().ok().flatten().unwrap();
+    let mut ret = false;
+    if are_contiguous_fragments(frag1, frag2, tid1_opt,tid2_opt){
+        ret = true
+    }
+    ret
+}
+
+fn is_self_circle(read1: &bam::Record, read2: &bam::Record) -> bool{
+    let mut ret = false;
+    if let Some((r1,r2)) = get_ordered_reads(read1, read2) {
+        (get_read_strand(r1) == "-") && (get_read_strand(r2) == "+")
+    } else{
+        false
+    }
+}
 
 
 fn get_overlapping_restriction_fragment(res_frag : &HashMap<String, Lapper<u64,BED<3>>>, 
