@@ -8,6 +8,7 @@ use bed_utils::intervaltree::{Interval, Lapper};
 use std::collections::HashMap;
 use std::fs::File;
 use log::warn;
+use std::ptr;
 
 #[derive(Parser, Debug)]
 #[clap(author = "GilbertHan", version, about = "Bam to HiC fragments")]
@@ -144,6 +145,93 @@ fn is_self_circle(read1: &bam::Record, read2: &bam::Record) -> bool{
     }
 }
 
+/*
+    Both reads are expected to be on the same restriction fragments
+    Check the orientation of reads -><-
+
+    read1 : [AlignedRead]
+    read2 : [AlignedRead]
+ */
+fn is_dangling_end(read1: &bam::Record, read2: &bam::Record) -> bool{
+    let (r1, r2) = get_ordered_reads(read1, read2).unwrap();
+    let mut ret = false;
+    if (get_read_strand(r1) == "+" && get_read_strand(r2) =="-"){
+        ret = true;
+    }
+    ret
+}
+
+/*
+    Both reads are expected to be on the different restriction fragments
+    Check the orientation of reads ->-> / <-<- / -><- / <-->
+
+    read1 : [AlignedRead]
+    read2 : [AlignedRead]
+ */
+
+fn get_valid_orientation(read1: &bam::Record, read2: &bam::Record) -> &'static str{
+    let (r1, r2) = get_ordered_reads(read1, read2).unwrap();
+    let r1_strand = get_read_strand(r1);
+    let r2_strand = get_read_strand(r2);
+    let direction: &'static str = match (r1_strand, r2_strand){
+        ("+", "+") => "FF",
+        ("-", "-") => "RR",
+        ("+", "-") => "FR",
+        ("-", "+") => "RF",
+        _ => "Unknown",
+    };
+    direction
+}
+
+fn get_pe_fragment_size(read1: &bam::Record, read2: &bam::Record, 
+    res_frag1: BED<3>, res_frag2: BED<3>,
+    interaction_type: &str) -> Option<u64>{
+ // 1. Get ordered reads. If this is None, the chain stops and returns None.
+    get_ordered_reads(read1, read2).and_then(|(r1, r2)| {
+        
+        // 2. Pair up fragments with the *ordered* reads.
+        //    (This now assigns references, which is cheap and safe)
+        let (rfrag1, rfrag2) = if ptr::eq(r1, read2) { // Check if r1 is the original read2
+            (res_frag2, res_frag1) 
+        } else {
+            (res_frag1, res_frag2)
+        };
+        let r1pos_opt = get_read_pos(r1, "middle");
+        let r2pos_opt = get_read_pos(r2, "middle");
+
+        r1pos_opt.zip(r2pos_opt).map(|(r1pos_usize, r2pos_usize)| {
+            
+            // These variables are defined *inside* this closure
+            let r1pos = r1pos_usize as u64;
+            let r2pos = r2pos_usize as u64;
+
+            // 4. Calculate size. Use `saturating_sub` to PREVENT panics.
+            if interaction_type == "DE" || interaction_type == "RE" {
+                // r2 is the rightmost read, so r2pos >= r1pos
+                r2pos.saturating_sub(r1pos)
+            } else if interaction_type == "SC" {
+                let d1 = r1pos.saturating_sub(rfrag1.start());
+                let d2 = rfrag2.end().saturating_sub(r2pos);
+                d1 + d2
+            } else if interaction_type == "VI" {
+                let dr1 = if get_read_strand(r1) == "+" {
+                    rfrag1.end().saturating_sub(r1pos)
+                } else {
+                    r1pos.saturating_sub(rfrag1.start())
+                };
+                
+                let dr2 = if get_read_strand(r2) == "+" {
+                    rfrag2.end().saturating_sub(r2pos)
+                } else {
+                    r2pos.saturating_sub(rfrag2.start())
+                };
+                dr1 + dr2
+            } else {
+                0 // Safe default
+            }
+        })
+    })
+}
 
 fn get_overlapping_restriction_fragment(res_frag : &HashMap<String, Lapper<u64,BED<3>>>, 
     chrom: &str, read:  &bam::Record) -> Option<BED<3>> {
