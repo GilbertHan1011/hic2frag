@@ -233,6 +233,38 @@ fn get_pe_fragment_size(read1: &bam::Record, read2: &bam::Record,
     })
 }
 
+fn get_interaction_type(read1: &bam::Record, read1_chrom: &str, res_frag1 : BED<3>,
+    read2: &bam::Record, read2_chrom: &str, res_frag2 : BED<3>,verbose: bool)-> Option<&'static str>{
+        match (read1.flags().is_unmapped(), read2.flags().is_unmapped(),&res_frag1, &res_frag2) {
+            (false, false, rf1, rf2) =>{
+                if ptr::eq(&res_frag1, &res_frag2) {
+                    if is_self_circle(read1, read2){
+                        Some("SC")
+                    } else if is_dangling_end(read1, read2){
+                        Some("DE")
+                    } else{
+                        None
+                    }
+                } else {
+                    if is_religation(read1, read2, rf1.clone(), rf2.clone()) {
+                        Some("RE")
+                    } else {
+                        // This is the valid interaction case
+                        Some("VI")
+                    }
+                }
+            },
+            (true,_,_,_) | (_,true,_,_) =>{
+                Some("SI")
+            },
+            (false,false,_,_) =>{
+                None
+            }
+        }
+    }
+
+
+
 fn get_overlapping_restriction_fragment(res_frag : &HashMap<String, Lapper<u64,BED<3>>>, 
     chrom: &str, read:  &bam::Record) -> Option<BED<3>> {
     let pos = get_read_pos(read, "middle").unwrap();
