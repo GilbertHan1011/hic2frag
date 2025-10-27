@@ -116,12 +116,12 @@ fn get_read_start(read: &bam::Record) -> usize{
     pos
 }
 
-fn get_read_strand(read: &bam::Record) -> &str{
-    let mut strand = "+";
+fn get_read_strand(read: &bam::Record) -> &'static str{
     if read.flags().is_reverse_complemented(){
-        strand = "-"
+        "-"
+    } else {
+        "+"
     }
-    strand
 }
 
 fn is_intra_chrom(read1:  &bam::Record, read2 :  &bam::Record) -> Option<bool>{
@@ -189,6 +189,12 @@ fn are_contiguous_fragments(frag1:BED<6>, frag2:BED<6>, chr1:usize, chr2:usize) 
     let frag1_touch_frag2 = frag1.end() == frag2.start();
     let frag2_touch_frag1 = frag1.start() == frag2.end();
     frag2_touch_frag1 || frag1_touch_frag2
+}
+
+fn are_same_fragment(frag1: &BED<6>, frag2: &BED<6>) -> bool {
+    frag1.chrom() == frag2.chrom() && 
+    frag1.start() == frag2.start() && 
+    frag1.end() == frag2.end()
 }
 
 fn is_religation(read1: &bam::Record, read2: &bam::Record,frag1:BED<6>, frag2:BED<6>)-> bool{
@@ -306,7 +312,7 @@ fn get_interaction_type(read1: &bam::Record, _read1_chrom: &str, res_frag1 : Opt
     read2: &bam::Record, _read2_chrom: &str, res_frag2 : Option<BED<6>>, _verbose: bool)-> Option<&'static str>{
         match (read1.flags().is_unmapped(), read2.flags().is_unmapped(),&res_frag1, &res_frag2) {
             (false, false, Some(rf1), Some(rf2)) =>{
-                if ptr::eq(rf1, rf2) {
+                if are_same_fragment(rf1, rf2) {
                     if is_self_circle(read1, read2){
                         Some("SC")
                     } else if is_dangling_end(read1, read2){
