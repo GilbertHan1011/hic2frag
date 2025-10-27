@@ -52,10 +52,10 @@ struct OutputHandlers {
 #[derive(Parser, Debug, Clone)]
 #[clap(author = "GilbertHan", version, about = "Bam to HiC fragments")]
 struct Cli {
-    #[clap(short, long, help = "Restriction fragment file (BED format)")]
+    #[clap(short = 'f', long, help = "Restriction fragment file (BED format)")]
     fragment_file: String,
 
-    #[clap(short, long, help = "BAM/SAM file of mapped reads")]
+    #[clap(short = 'r', long, help = "BAM/SAM file of mapped reads")]
     bam: String,
 
     #[clap(short, long, help = "Output directory. Default is current directory")]
@@ -147,10 +147,10 @@ fn get_cis_distance(read1:  &bam::Record, read2 :  &bam::Record) -> Option<usize
     let unmap1 = read1.flags().is_unmapped();
     let unmap2 = read2.flags().is_unmapped();
     if !unmap1 && !unmap2{
-        let r1pos = get_read_pos(read1,"middle").unwrap();
-        let r2pos = get_read_pos(read2, "middle").unwrap();
+        let r1pos = get_read_pos(read1,"start").unwrap();
+        let r2pos = get_read_pos(read2, "start").unwrap();
         if r1pos > r2pos {
-            dist = Some(r1pos - r2pos);
+            dist = Some(r1pos - r2pos); //maintain same as hic-pro statistics
         } else {
             dist = Some(r2pos - r1pos);
         }
@@ -168,8 +168,8 @@ fn get_ordered_reads<'a>(read1: &'a bam::Record, read2: &'a bam::Record)
         } else if tid1 > tid2{
             Some((read2, read1))
         } else {
-            let r1pos_opt = get_read_pos(read1, "middle");
-            let r2pos_opt = get_read_pos(read2, "middle");
+            let r1pos_opt = get_read_pos(read1, "start");
+            let r2pos_opt = get_read_pos(read2, "start");
             r1pos_opt.zip(r2pos_opt).map(|(r1pos, r2pos)| {
                 // We have valid positions. Sort by position.
                 if r1pos <= r2pos {
@@ -182,7 +182,7 @@ fn get_ordered_reads<'a>(read1: &'a bam::Record, read2: &'a bam::Record)
     })
 }
 
-fn are_contiguous_fragments(frag1:BED<3>, frag2:BED<3>, chr1:usize, chr2:usize) -> bool{
+fn are_contiguous_fragments(frag1:BED<6>, frag2:BED<6>, chr1:usize, chr2:usize) -> bool{
     if chr1 != chr2{
         return false
     } 
@@ -191,7 +191,7 @@ fn are_contiguous_fragments(frag1:BED<3>, frag2:BED<3>, chr1:usize, chr2:usize) 
     frag2_touch_frag1 || frag1_touch_frag2
 }
 
-fn is_religation(read1: &bam::Record, read2: &bam::Record,frag1:BED<3>, frag2:BED<3>)-> bool{
+fn is_religation(read1: &bam::Record, read2: &bam::Record,frag1:BED<6>, frag2:BED<6>)-> bool{
     let tid1_opt = read1.reference_sequence_id().transpose().ok().flatten().unwrap();
     let tid2_opt = read2.reference_sequence_id().transpose().ok().flatten().unwrap();
     let mut ret = false;
@@ -247,7 +247,7 @@ fn get_valid_orientation(read1: &bam::Record, read2: &bam::Record) -> &'static s
 }
 
 fn get_pe_fragment_size(read1: &bam::Record, read2: &bam::Record, 
-    res_frag1: Option<BED<3>>, res_frag2: Option<BED<3>>,
+    res_frag1: Option<BED<6>>, res_frag2: Option<BED<6>>,
     interaction_type: &str) -> Option<u64>{
  // 1. Get ordered reads. If this is None, the chain stops and returns None.
     get_ordered_reads(read1, read2).and_then(|(r1, r2)| {
@@ -265,8 +265,8 @@ fn get_pe_fragment_size(read1: &bam::Record, read2: &bam::Record,
             (Some(f1), Some(f2)) => (f1, f2),
             _ => return None,
         };
-        let r1pos_opt = get_read_pos(r1, "middle");
-        let r2pos_opt = get_read_pos(r2, "middle");
+        let r1pos_opt = get_read_pos(r1, "start");
+        let r2pos_opt = get_read_pos(r2, "start");
 
         r1pos_opt.zip(r2pos_opt).map(|(r1pos_usize, r2pos_usize)| {
             
@@ -279,20 +279,20 @@ fn get_pe_fragment_size(read1: &bam::Record, read2: &bam::Record,
                 // r2 is the rightmost read, so r2pos >= r1pos
                 r2pos.saturating_sub(r1pos)
             } else if interaction_type == "SC" {
-                let d1 = r1pos.saturating_sub(rfrag1.start());
-                let d2 = rfrag2.end().saturating_sub(r2pos);
+                let d1 = r1pos.saturating_sub(rfrag1.start() + 1);
+                let d2 = rfrag2.end().saturating_sub(r2pos + 1);
                 d1 + d2
             } else if interaction_type == "VI" {
                 let dr1 = if get_read_strand(r1) == "+" {
-                    rfrag1.end().saturating_sub(r1pos)
+                    rfrag1.end().saturating_sub(r1pos + 1)
                 } else {
-                    r1pos.saturating_sub(rfrag1.start())
+                    r1pos.saturating_sub(rfrag1.start()+1)
                 };
                 
                 let dr2 = if get_read_strand(r2) == "+" {
-                    rfrag2.end().saturating_sub(r2pos)
+                    rfrag2.end().saturating_sub(r2pos+1)
                 } else {
-                    r2pos.saturating_sub(rfrag2.start())
+                    r2pos.saturating_sub(rfrag2.start()+1)
                 };
                 dr1 + dr2
             } else {
@@ -302,8 +302,8 @@ fn get_pe_fragment_size(read1: &bam::Record, read2: &bam::Record,
     })
 }
 
-fn get_interaction_type(read1: &bam::Record, _read1_chrom: &str, res_frag1 : Option<BED<3>>,
-    read2: &bam::Record, _read2_chrom: &str, res_frag2 : Option<BED<3>>, _verbose: bool)-> Option<&'static str>{
+fn get_interaction_type(read1: &bam::Record, _read1_chrom: &str, res_frag1 : Option<BED<6>>,
+    read2: &bam::Record, _read2_chrom: &str, res_frag2 : Option<BED<6>>, _verbose: bool)-> Option<&'static str>{
         match (read1.flags().is_unmapped(), read2.flags().is_unmapped(),&res_frag1, &res_frag2) {
             (false, false, Some(rf1), Some(rf2)) =>{
                 if ptr::eq(rf1, rf2) {
@@ -332,8 +332,8 @@ fn get_interaction_type(read1: &bam::Record, _read1_chrom: &str, res_frag1 : Opt
 
 
 
-fn get_overlapping_restriction_fragment(res_frag : &HashMap<String, Lapper<u64,BED<3>>>, 
-    chrom: &str, read:  &bam::Record) -> Option<BED<3>> {
+fn get_overlapping_restriction_fragment(res_frag : &HashMap<String, Lapper<u64,BED<6>>>, 
+    chrom: &str, read:  &bam::Record) -> Option<BED<6>> {
     let pos = get_read_pos(read, "middle").unwrap();
     if let Some(lapper) = res_frag.get(chrom) {
         let overlapping_frag : Vec<_> = lapper.find(pos as u64, pos as u64 + 1).collect();
@@ -469,10 +469,10 @@ fn write_valid_pair(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         read1.name().map(|n| n.to_string()).unwrap_or_else(|| "Unknown".to_string()),
         r1_chrom,
-        r1_pos + 1, // Convert to 1-based
+        r1_pos, 
         r1_strand,
         r2_chrom,
-        r2_pos + 1, // Convert to 1-based
+        r2_pos, 
         r2_strand,
         dist.map_or_else(|| "*".to_string(), |d| d.to_string()),
         r1_fragname,
@@ -543,162 +543,13 @@ fn write_statistics(stats: &Statistics, output_dir: &PathBuf, base_name: &str, g
 }
 
 
-fn main() -> Result<(), Box<dyn Error>> {
-    
-    let cli = Cli::parse();
-    
-    // Set up output directory
-    let output_dir = cli.out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
-    std::fs::create_dir_all(&output_dir)?;
-    
-    // Get base name for output files
-    let bam_path = PathBuf::from(&cli.bam);
-    let base_name = bam_path.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
-    
-    if cli.verbose {
-        info!("## HiC-Pro Rust Implementation");
-        info!("## mappedReadsFile= {}", cli.bam);
-        info!("## fragmentFile= {}", cli.fragment_file);
-        info!("## minInsertSize= {:?}", cli.min_insert_size);
-        info!("## maxInsertSize= {:?}", cli.max_insert_size);
-        info!("## minFragSize= {:?}", cli.min_frag_size);
-        info!("## maxFragSize= {:?}", cli.max_frag_size);
-        info!("## allOutput= {}", cli.all);
-        info!("## SAM output= {}", cli.sam);
-        info!("## verbose= {}", cli.verbose);
-    }
-    
-    // Load restriction fragments
-    if cli.verbose {
-        info!("## Loading Restriction File Intervals {} ...", cli.fragment_file);
-    }
-    let bed_file_open = File::open(&cli.fragment_file)?;
-    let bed_reader = Reader::new(bed_file_open, None);
-    let bed_rec: Vec<BED<3>> = bed_reader.into_records::<BED<3>>()
-        .map(|r| r.unwrap())
-        .collect();
-    
-    // Filter fragments by size if specified
-    let filtered_bed_rec: Vec<BED<3>> = bed_rec.into_iter()
-        .filter(|bed| {
-            let frag_len = bed.end() - bed.start();
-            if let Some(min_size) = cli.min_frag_size {
-                if frag_len < min_size { return false; }
-            }
-            if let Some(max_size) = cli.max_frag_size {
-                if frag_len > max_size { return false; }
-            }
-            true
-        })
-        .collect();
-    
-    let bed_ladder = convert_vec_to_lapper(&filtered_bed_rec);
-    
-    // Create output handlers
-    let mut handlers = create_output_handlers(&output_dir, base_name, cli.all, cli.sam)?;
-    
-    // Initialize statistics
-    let mut stats = Statistics::default();
-    
-    // Open BAM file
-    if cli.verbose {
-        info!("## Opening BAM file {} ...", cli.bam);
-    }
-    let mut reader = bam::io::reader::Builder::default().build_from_path(&cli.bam)?;
-    let headers = reader.read_header()?;
-    
-    if cli.verbose {
-        info!("## Classifying Interactions ...");
-    }
-    
-    // Process reads
-    let mut r1: Option<bam::Record> = None;
-    let mut r1_chrom: Option<String> = None;
-    let mut r1_resfrag: Option<BED<3>> = None;
-    
-    for result in reader.records() {
-        let record = result?;
-        stats.reads_counter += 1;
-        
-        if record.flags().is_first_segment() {
-            r1 = Some(record);
-            if let Some(ref r1_ref) = r1 {
-                if !r1_ref.flags().is_unmapped() {
-                    if let Some(result) = r1_ref.reference_sequence(&headers) {
-                        let (name_bytes, _) = result?;
-                        r1_chrom = Some(std::str::from_utf8(name_bytes)?.to_string());
-                        r1_resfrag = get_overlapping_restriction_fragment(&bed_ladder, r1_chrom.as_ref().unwrap(), r1_ref);
-                    } else {
-                        r1_chrom = None;
-                        r1_resfrag = None;
-                    }
-                } else {
-                    r1_chrom = None;
-                    r1_resfrag = None;
-                }
-            }
-        } else if record.flags().is_last_segment() {
-            let r2 = record;
-            let (r2_chrom, r2_resfrag) = if !r2.flags().is_unmapped() {
-                if let Some(result) = r2.reference_sequence(&headers) {
-                    let (name_bytes, _) = result?;
-                    let r2_chrom = std::str::from_utf8(name_bytes)?.to_string();
-                    let res_frag = get_overlapping_restriction_fragment(&bed_ladder, &r2_chrom, &r2);
-                    (Some(r2_chrom), res_frag)
-                } else {
-                    (None, None)
-                }
-            } else {
-                (None, None)
-            };
-            
-            // Process the read pair
-            if let Some(r1_ref) = r1.take() {
-                process_read_pair(
-                    &r1_ref,
-                    r1_chrom.as_deref(),
-                    r1_resfrag.as_ref(),
-                    &r2,
-                    r2_chrom.as_deref(),
-                    r2_resfrag.as_ref(),
-                    &mut handlers,
-                    &mut stats,
-                    cli.clone(),
-                )?;
-            }
-            
-            // Reset for next pair
-            r1 = None;
-            r1_chrom = None;
-            r1_resfrag = None;
-        }
-        
-        if stats.reads_counter % 100000 == 0 && cli.verbose {
-            info!("## {}", stats.reads_counter);
-        }
-    }
-    
-    // Write statistics
-    write_statistics(&stats, &output_dir, base_name, cli.gtag.as_ref())?;
-    
-    if cli.verbose {
-        info!("## Processing complete!");
-        info!("## Total reads processed: {}", stats.reads_counter);
-        info!("## Valid interactions: {}", stats.valid_counter);
-    }
-    
-    Ok(())
-}
-
 fn process_read_pair(
     r1: &bam::Record,
     r1_chrom: Option<&str>,
-    r1_resfrag: Option<&BED<3>>,
+    r1_resfrag: Option<&BED<6>>,
     r2: &bam::Record,
     r2_chrom: Option<&str>,
-    r2_resfrag: Option<&BED<3>>,
+    r2_resfrag: Option<&BED<6>>,
     handlers: &mut OutputHandlers,
     stats: &mut Statistics,
     cli: Cli,
@@ -817,13 +668,14 @@ fn process_read_pair(
         Ok(())
 }
 
+
 fn write_output_pair(
     r1: &bam::Record,
     r2: &bam::Record,
     r1_chrom: Option<&str>,
     r2_chrom: Option<&str>,
-    r1_resfrag: Option<&BED<3>>,
-    r2_resfrag: Option<&BED<3>>,
+    r1_resfrag: Option<&BED<6>>,
+    r2_resfrag: Option<&BED<6>>,
     dist: Option<u64>,
     handler: &mut BufWriter<File>,
     gtag: Option<&str>,
@@ -837,13 +689,13 @@ fn write_output_pair(
             let or1_resfrag = if ptr::eq(or1, r1) { r1_resfrag } else { r2_resfrag };
             let or2_resfrag = if ptr::eq(or1, r1) { r2_resfrag } else { r1_resfrag };
             
-            let or1_pos = get_read_pos(or1, "middle").unwrap_or(0);
-            let or2_pos = get_read_pos(or2, "middle").unwrap_or(0);
+            let or1_pos = get_read_pos(or1, "start").unwrap_or(0);
+            let or2_pos = get_read_pos(or2, "start").unwrap_or(0);
             let or1_strand = get_read_strand(or1);
             let or2_strand = get_read_strand(or2);
             
-            let or1_fragname = or1_resfrag.map(|f| f.chrom().to_string()).unwrap_or_else(|| "None".to_string());
-            let or2_fragname = or2_resfrag.map(|f| f.chrom().to_string()).unwrap_or_else(|| "None".to_string());
+            let or1_fragname = or1_resfrag.map(|f| f.name().unwrap().to_string()).unwrap_or_else(|| "None".to_string());
+            let or2_fragname = or2_resfrag.map(|f| f.name().unwrap().to_string()).unwrap_or_else(|| "None".to_string());
             
             let htag = if gtag.is_some() { "0-0" } else { "" };
             
@@ -862,7 +714,7 @@ fn write_output_pair(
             )?;
         }
     } else if r2.flags().is_unmapped() && !r1.flags().is_unmapped() {
-        let r1_pos = get_read_pos(r1, "middle").unwrap_or(0);
+        let r1_pos = get_read_pos(r1, "start").unwrap_or(0);
         let r1_strand = get_read_strand(r1);
         let r1_fragname = r1_resfrag.map(|f| f.chrom().to_string()).unwrap_or_else(|| "None".to_string());
         
@@ -876,7 +728,7 @@ fn write_output_pair(
             r1.mapping_quality().map(|q| q.get()).unwrap_or(0),
         )?;
     } else if r1.flags().is_unmapped() && !r2.flags().is_unmapped() {
-        let r2_pos = get_read_pos(r2, "middle").unwrap_or(0);
+        let r2_pos = get_read_pos(r2, "start").unwrap_or(0);
         let r2_strand = get_read_strand(r2);
         let r2_fragname = r2_resfrag.map(|f| f.chrom().to_string()).unwrap_or_else(|| "None".to_string());
         
@@ -899,12 +751,12 @@ fn write_single_output(
     r2: &bam::Record,
     r1_chrom: Option<&str>,
     r2_chrom: Option<&str>,
-    r1_resfrag: Option<&BED<3>>,
-    r2_resfrag: Option<&BED<3>>,
+    r1_resfrag: Option<&BED<6>>,
+    r2_resfrag: Option<&BED<6>>,
     handler: &mut BufWriter<File>,
 ) -> Result<(), Box<dyn Error>> {
     if !r1.flags().is_unmapped() {
-        let r1_pos = get_read_pos(r1, "middle").unwrap_or(0);
+        let r1_pos = get_read_pos(r1, "start").unwrap_or(0);
         let r1_strand = get_read_strand(r1);
         let r1_fragname = r1_resfrag.map(|f| f.chrom().to_string()).unwrap_or_else(|| "None".to_string());
         
@@ -920,7 +772,7 @@ fn write_single_output(
     }
     
     if !r2.flags().is_unmapped() {
-        let r2_pos = get_read_pos(r2, "middle").unwrap_or(0);
+        let r2_pos = get_read_pos(r2, "start").unwrap_or(0);
         let r2_strand = get_read_strand(r2);
         let r2_fragname = r2_resfrag.map(|f| f.chrom().to_string()).unwrap_or_else(|| "None".to_string());
         
@@ -937,3 +789,153 @@ fn write_single_output(
 
         Ok(())
 }
+
+fn main() -> Result<(), Box<dyn Error>> {
+    
+    let cli = Cli::parse();
+    
+    // Set up output directory
+    let output_dir = cli.out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&output_dir)?;
+    
+    // Get base name for output files
+    let bam_path = PathBuf::from(&cli.bam);
+    let base_name = bam_path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    
+    if cli.verbose {
+        info!("## HiC-Pro Rust Implementation");
+        info!("## mappedReadsFile= {}", cli.bam);
+        info!("## fragmentFile= {}", cli.fragment_file);
+        info!("## minInsertSize= {:?}", cli.min_insert_size);
+        info!("## maxInsertSize= {:?}", cli.max_insert_size);
+        info!("## minFragSize= {:?}", cli.min_frag_size);
+        info!("## maxFragSize= {:?}", cli.max_frag_size);
+        info!("## allOutput= {}", cli.all);
+        info!("## SAM output= {}", cli.sam);
+        info!("## verbose= {}", cli.verbose);
+    }
+    
+    // Load restriction fragments
+    if cli.verbose {
+        info!("## Loading Restriction File Intervals {} ...", cli.fragment_file);
+    }
+    let bed_file_open = File::open(&cli.fragment_file)?;
+    let bed_reader = Reader::new(bed_file_open, None);
+    let bed_rec: Vec<BED<6>> = bed_reader.into_records::<BED<6>>()
+        .map(|r| r.unwrap())
+        .collect();
+    
+    // Filter fragments by size if specified
+    let filtered_bed_rec: Vec<BED<6>> = bed_rec.into_iter()
+        .filter(|bed| {
+            let frag_len = bed.end() - bed.start();
+            if let Some(min_size) = cli.min_frag_size {
+                if frag_len < min_size { return false; }
+            }
+            if let Some(max_size) = cli.max_frag_size {
+                if frag_len > max_size { return false; }
+            }
+            true
+        })
+        .collect();
+    
+    let bed_ladder = convert_vec_to_lapper(&filtered_bed_rec);
+    
+    // Create output handlers
+    let mut handlers = create_output_handlers(&output_dir, base_name, cli.all, cli.sam)?;
+    
+    // Initialize statistics
+    let mut stats = Statistics::default();
+    
+    // Open BAM file
+    if cli.verbose {
+        info!("## Opening BAM file {} ...", cli.bam);
+    }
+    let mut reader = bam::io::reader::Builder::default().build_from_path(&cli.bam)?;
+    let headers = reader.read_header()?;
+    
+    if cli.verbose {
+        info!("## Classifying Interactions ...");
+    }
+    
+    // Process reads
+    let mut r1: Option<bam::Record> = None;
+    let mut r1_chrom: Option<String> = None;
+    let mut r1_resfrag: Option<BED<6>> = None;
+    
+    for result in reader.records() {
+        let record = result?;
+        stats.reads_counter += 1;
+        
+        if record.flags().is_first_segment() {
+            r1 = Some(record);
+            if let Some(ref r1_ref) = r1 {
+                if !r1_ref.flags().is_unmapped() {
+                    if let Some(result) = r1_ref.reference_sequence(&headers) {
+                        let (name_bytes, _) = result?;
+                        r1_chrom = Some(std::str::from_utf8(name_bytes)?.to_string());
+                        r1_resfrag = get_overlapping_restriction_fragment(&bed_ladder, r1_chrom.as_ref().unwrap(), r1_ref);
+                    } else {
+                        r1_chrom = None;
+                        r1_resfrag = None;
+                    }
+                } else {
+                    r1_chrom = None;
+                    r1_resfrag = None;
+                }
+            }
+        } else if record.flags().is_last_segment() {
+            let r2 = record;
+            let (r2_chrom, r2_resfrag) = if !r2.flags().is_unmapped() {
+                if let Some(result) = r2.reference_sequence(&headers) {
+                    let (name_bytes, _) = result?;
+                    let r2_chrom = std::str::from_utf8(name_bytes)?.to_string();
+                    let res_frag = get_overlapping_restriction_fragment(&bed_ladder, &r2_chrom, &r2);
+                    (Some(r2_chrom), res_frag)
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+            
+            // Process the read pair
+            if let Some(r1_ref) = r1.take() {
+                process_read_pair(
+                    &r1_ref,
+                    r1_chrom.as_deref(),
+                    r1_resfrag.as_ref(),
+                    &r2,
+                    r2_chrom.as_deref(),
+                    r2_resfrag.as_ref(),
+                    &mut handlers,
+                    &mut stats,
+                    cli.clone(),
+                )?;
+            }
+            
+            // Reset for next pair
+            r1 = None;
+            r1_chrom = None;
+            r1_resfrag = None;
+        }
+        
+        if stats.reads_counter % 100000 == 0 && cli.verbose {
+            info!("## {}", stats.reads_counter);
+        }
+    }
+    
+    // Write statistics
+    write_statistics(&stats, &output_dir, base_name, cli.gtag.as_ref())?;
+    
+    if cli.verbose {
+        info!("## Processing complete!");
+        info!("## Total reads processed: {}", stats.reads_counter);
+        info!("## Valid interactions: {}", stats.valid_counter);
+    }
+    
+    Ok(())
+}
+
